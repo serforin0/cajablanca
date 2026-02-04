@@ -111,6 +111,33 @@ def init_db():
         """
     )
 
+    # ---------------- NUEVO: puntos por jugador por ronda/mesa ----------------
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_round_scores (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            round         INTEGER NOT NULL,
+            mesa          INTEGER NOT NULL,
+            jugador_id    INTEGER NOT NULL,
+            letra         TEXT NOT NULL, -- A, B, C, D
+            base_points    INTEGER NOT NULL DEFAULT 0,
+            penalty_points INTEGER NOT NULL DEFAULT 0,
+            final_points   INTEGER NOT NULL DEFAULT 0,
+            winner_pair    TEXT NOT NULL CHECK (winner_pair IN ('AC', 'BD')),
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(round, mesa, jugador_id),
+            FOREIGN KEY (jugador_id) REFERENCES players(id)
+        );
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_player_round_scores_unique_seat
+        ON player_round_scores (round, mesa, letra);
+        """
+    )
+
     # ---------------- NUEVO: stats por jugador ----------------
     cur.execute(
         """
@@ -152,6 +179,82 @@ def init_db():
 
     # Asegura que TODO jugador tenga su fila en player_stats
     ensure_player_stats_rows()
+    _ensure_player_round_scores_schema()
+
+
+def _ensure_player_round_scores_schema():
+    """Migra tabla player_round_scores si existe con nombres legacy."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='player_round_scores';
+        """
+    )
+    if not cur.fetchone():
+        conn.close()
+        return
+
+    cur.execute("PRAGMA table_info(player_round_scores);")
+    columns = {row[1] for row in cur.fetchall()}
+
+    legacy_cols = {"points_base", "penalty", "points_final", "winner_pareja"}
+    new_cols = {"base_points", "penalty_points", "final_points", "winner_pair"}
+
+    if legacy_cols.issubset(columns) and not new_cols.issubset(columns):
+        cur.execute(
+            """
+            ALTER TABLE player_round_scores
+            RENAME TO player_round_scores_legacy;
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE player_round_scores (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                round         INTEGER NOT NULL,
+                mesa          INTEGER NOT NULL,
+                jugador_id    INTEGER NOT NULL,
+                letra         TEXT NOT NULL,
+                base_points   INTEGER NOT NULL DEFAULT 0,
+                penalty_points INTEGER NOT NULL DEFAULT 0,
+                final_points  INTEGER NOT NULL DEFAULT 0,
+                winner_pair   TEXT NOT NULL CHECK (winner_pair IN ('AC', 'BD')),
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(round, mesa, jugador_id),
+                FOREIGN KEY (jugador_id) REFERENCES players(id)
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_player_round_scores_unique_seat
+            ON player_round_scores (round, mesa, letra);
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO player_round_scores (
+                id, round, mesa, jugador_id, letra,
+                base_points, penalty_points, final_points, winner_pair, created_at
+            )
+            SELECT
+                id, round, mesa, jugador_id, letra,
+                points_base, penalty, points_final,
+                CASE
+                    WHEN winner_pareja IN ('AC','BD') THEN winner_pareja
+                    ELSE 'AC'
+                END,
+                created_at
+            FROM player_round_scores_legacy;
+            """
+        )
+        cur.execute("DROP TABLE player_round_scores_legacy;")
+
+    conn.commit()
+    conn.close()
 
 
 def seed_demo_players(conn: sqlite3.Connection):
@@ -285,7 +388,6 @@ def clear_round(round_number: int):
 
     cur.execute("DELETE FROM seats WHERE round = ?;", (round_number,))
     cur.execute("DELETE FROM table_status WHERE round = ?;", (round_number,))
-    cur.execute("DELETE FROM table_results WHERE round = ?;", (round_number,))
 
     conn.commit()
     conn.close()
@@ -302,10 +404,9 @@ def save_round_assignments(round_number: int, mesas: list[dict]):
     conn = get_connection()
     cur = conn.cursor()
 
-    # Borramos todo lo de esa ronda (asientos, estado y resultados)
+    # Borramos todo lo de esa ronda (asientos y estado)
     cur.execute("DELETE FROM seats WHERE round = ?;", (round_number,))
     cur.execute("DELETE FROM table_status WHERE round = ?;", (round_number,))
-    cur.execute("DELETE FROM table_results WHERE round = ?;", (round_number,))
 
     seat_rows = []
     status_rows = []
@@ -417,6 +518,37 @@ def get_round_assignments(round_number: int) -> list[dict]:
     return [mesas_dict[m] for m in sorted(mesas_dict.keys())]
 
 
+def get_round_seat_list(round_number: int) -> list[dict]:
+    """Devuelve lista de asientos simples: [{jugador_id, mesa, letra}]."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT jugador_id, mesa, letra
+        FROM seats
+        WHERE round = ?
+        ORDER BY jugador_id ASC;
+        """,
+        (round_number,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [{"jugador_id": jid, "mesa": mesa, "letra": letra} for jid, mesa, letra in rows]
+
+
+def round_has_scores(round_number: int) -> bool:
+    """Indica si la ronda tiene resultados guardados por jugador."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM player_round_scores WHERE round = ? LIMIT 1;",
+        (round_number,),
+    )
+    exists = cur.fetchone() is not None
+    conn.close()
+    return exists
+
+
 # ---------- ESTADO DE MESAS ----------
 
 def get_tables_status(round_number: int) -> dict[int, str]:
@@ -484,6 +616,94 @@ def save_table_result(round_number: int, mesa_number: int, points_a: int, points
     conn.close()
 
 
+def save_table_player_scores(
+    round_number: int,
+    mesa_number: int,
+    player_scores: list[dict],
+    winner_pair: str,
+):
+    """
+    Guarda puntos por jugador (A,B,C,D) para una mesa.
+    player_scores = [
+        {"jugador_id": int, "letra": "A", "base_points": int, "penalty_points": int},
+        ...
+    ]
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    insert_rows = []
+    for row in player_scores:
+        base_points = int(row.get("base_points", 0))
+        penalty_points = int(row.get("penalty_points", 0))
+        final_points = max(0, base_points - max(0, penalty_points))
+
+        insert_rows.append(
+            (
+                round_number,
+                mesa_number,
+                row["jugador_id"],
+                row["letra"],
+                base_points,
+                max(0, penalty_points),
+                final_points,
+                winner_pair,
+            )
+        )
+
+    cur.executemany(
+        """
+        INSERT INTO player_round_scores (
+            round, mesa, jugador_id, letra,
+            base_points, penalty_points, final_points, winner_pair
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(round, mesa, jugador_id) DO UPDATE SET
+            base_points = excluded.base_points,
+            penalty_points = excluded.penalty_points,
+            final_points = excluded.final_points,
+            winner_pair = excluded.winner_pair,
+            created_at = datetime('now');
+        """,
+        insert_rows,
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_table_player_scores(round_number: int, mesa_number: int) -> list[dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT jugador_id, letra, base_points, penalty_points, final_points, winner_pair
+        FROM player_round_scores
+        WHERE round = ? AND mesa = ?
+        ORDER BY CASE letra
+            WHEN 'A' THEN 1
+            WHEN 'B' THEN 2
+            WHEN 'C' THEN 3
+            WHEN 'D' THEN 4
+        END;
+        """,
+        (round_number, mesa_number),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "jugador_id": jid,
+            "letra": letra,
+            "base_points": base_points,
+            "penalty_points": penalty_points,
+            "final_points": final_points,
+            "winner_pair": winner_pair,
+        }
+        for (jid, letra, base_points, penalty_points, final_points, winner_pair) in rows
+    ]
+
+
 def get_table_result(round_number: int, mesa_number: int):
     conn = get_connection()
     cur = conn.cursor()
@@ -512,17 +732,17 @@ def reset_player_stats():
 def recompute_stats_from_results(win_weight: int = 100):
     """
     Recalcula G y P por jugador usando:
-    - seats: para saber qué jugadores estaban en A/B en cada mesa de cada ronda
-    - table_results: puntos y ganador
+    - player_round_scores: puntos individuales por ronda/mesa
+    - winner_pair: define si ganó AC o BD para sumar G
 
-    Convención (según tu app actual):
-      Equipo A = letras A y B
-      Equipo B = letras C y D
+    Convención:
+      Pareja AC = letras A y C
+      Pareja BD = letras B y D
 
     Fórmula:
-      E = (G*win_weight) + P
+      E = P (opción simple)
     Ranking:
-      ORDER BY E desc, P desc, G desc
+      ORDER BY P desc, G desc, ID asc
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -530,46 +750,25 @@ def recompute_stats_from_results(win_weight: int = 100):
     # 1) reset
     cur.execute("UPDATE player_stats SET g=0, p=0, e=0, r=0, updated_at=datetime('now');")
 
-    # 2) sumar puntos y ganadas por cada resultado registrado
+    # 2) sumar puntos y ganadas por cada jugador
     cur.execute(
         """
-        SELECT tr.round, tr.mesa, tr.points_a, tr.points_b, tr.winner
-        FROM table_results tr;
+        SELECT round, mesa, jugador_id, letra, final_points, winner_pair
+        FROM player_round_scores;
         """
     )
     results = cur.fetchall()
 
-    for rnd, mesa, pa, pb, winner in results:
+    for rnd, mesa, jid, letra, final_points, winner_pair in results:
         cur.execute(
-            """
-            SELECT letra, jugador_id
-            FROM seats
-            WHERE round = ? AND mesa = ?;
-            """,
-            (rnd, mesa),
+            "UPDATE player_stats SET p = p + ? WHERE jugador_id = ?;",
+            (final_points, jid),
         )
-        seats_rows = cur.fetchall()
 
-        seat_map = {letra: jid for letra, jid in seats_rows}
-
-        team_a = [seat_map.get("A"), seat_map.get("B")]
-        team_b = [seat_map.get("C"), seat_map.get("D")]
-        team_a = [x for x in team_a if x is not None]
-        team_b = [x for x in team_b if x is not None]
-
-        # puntos
-        for jid in team_a:
-            cur.execute("UPDATE player_stats SET p = p + ? WHERE jugador_id = ?;", (pa, jid))
-        for jid in team_b:
-            cur.execute("UPDATE player_stats SET p = p + ? WHERE jugador_id = ?;", (pb, jid))
-
-        # ganadas
-        if winner == "A":
-            for jid in team_a:
-                cur.execute("UPDATE player_stats SET g = g + 1 WHERE jugador_id = ?;", (jid,))
-        elif winner == "B":
-            for jid in team_b:
-                cur.execute("UPDATE player_stats SET g = g + 1 WHERE jugador_id = ?;", (jid,))
+        if winner_pair == "AC" and letra in ("A", "C"):
+            cur.execute("UPDATE player_stats SET g = g + 1 WHERE jugador_id = ?;", (jid,))
+        elif winner_pair == "BD" and letra in ("B", "D"):
+            cur.execute("UPDATE player_stats SET g = g + 1 WHERE jugador_id = ?;", (jid,))
 
     # 2.5) aplicar ajustes/penalizaciones a P
     cur.execute(
@@ -583,14 +782,13 @@ def recompute_stats_from_results(win_weight: int = 100):
         """
     )
 
-    # 3) calcular E
+    # 3) calcular E (opción simple: E = P). TODO: actualizar fórmula de efectividad.
     cur.execute(
         """
         UPDATE player_stats
-        SET e = (g * ?) + p,
+        SET e = p,
             updated_at = datetime('now');
         """,
-        (win_weight,),
     )
 
     # 4) ranking
@@ -598,7 +796,7 @@ def recompute_stats_from_results(win_weight: int = 100):
         """
         SELECT jugador_id
         FROM player_stats
-        ORDER BY e DESC, p DESC, g DESC, jugador_id ASC;
+        ORDER BY p DESC, g DESC, jugador_id ASC;
         """
     )
     ordered_ids = [row[0] for row in cur.fetchall()]
@@ -644,6 +842,21 @@ def get_ranking():
         }
         for (r, pid, nombre, apellido, g, puntos, e) in rows
     ]
+
+
+def get_player_stats_map() -> dict[int, dict]:
+    """Devuelve {jugador_id: {G, P, E, R}}."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT jugador_id, g, p, e, r
+        FROM player_stats;
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return {jid: {"G": g, "P": p, "E": e, "R": r} for jid, g, p, e, r in rows}
 
 
 def add_player_adjustment(jugador_id: int, delta_p: int, reason: str = ""):

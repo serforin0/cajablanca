@@ -23,6 +23,7 @@ def generate_score_sheets_for_round(
     round_number: int,
     output_dir: str = "hojas",
     tournament_title: str | None = None,
+    footer_text: str | None = None,
 ) -> Tuple[int, str]:
     """
     Genera una hoja de puntuación en PDF por cada mesa de la ronda.
@@ -44,7 +45,13 @@ def generate_score_sheets_for_round(
             output_dir,
             f"ronda{round_number}_mesa{mesa_num:02d}.pdf",
         )
-        _create_sheet_for_table(round_number, mesa, filename, tournament_title)
+        _create_sheet_for_table(
+            round_number,
+            mesa,
+            filename,
+            tournament_title,
+            footer_text=footer_text,
+        )
 
     return len(mesas), os.path.abspath(output_dir)
 
@@ -54,6 +61,7 @@ def generate_score_sheet_for_table(
     mesa_number: int,
     output_dir: str = "hojas",
     tournament_title: str | None = None,
+    footer_text: str | None = None,
 ) -> str:
     """
     Genera una hoja de puntuación en PDF solo para UNA mesa.
@@ -77,7 +85,13 @@ def generate_score_sheet_for_table(
         output_dir,
         f"ronda{round_number}_mesa{mesa_number:02d}.pdf",
     )
-    _create_sheet_for_table(round_number, mesa, filename, tournament_title)
+    _create_sheet_for_table(
+        round_number,
+        mesa,
+        filename,
+        tournament_title,
+        footer_text=footer_text,
+    )
     return os.path.abspath(filename)
 
 
@@ -90,6 +104,7 @@ def _create_sheet_for_table(
     mesa: dict,
     filename: str,
     tournament_title: str,
+    footer_text: str | None = None,
 ):
     """
     Crea un PDF tamaño carta (8.5 x 11") para una mesa.
@@ -103,7 +118,7 @@ def _create_sheet_for_table(
     c = canvas.Canvas(filename, pagesize=letter)
     width, height = letter
 
-    margin = 36  # 0.5"
+    margin = 32  # ~0.44"
     usable_width = width - 2 * margin
     # Dos bloques: izq/der, separados por un margen interior
     inner_margin = 24
@@ -118,10 +133,12 @@ def _create_sheet_for_table(
 
     # Título general centrado arriba
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width / 2.0, height - margin, tournament_title)
+    c.drawCentredString(width / 2.0, height - margin + 4, tournament_title)
 
     # Llamamos a la función que dibuja un bloque completo
-    top_y = height - margin - 20  # un poco debajo del título
+    top_y = height - margin - 14  # un poco debajo del título
+
+    stats_map = storage.get_player_stats_map()
 
     _draw_block(
         c=c,
@@ -130,6 +147,7 @@ def _create_sheet_for_table(
         block_width=block_width,
         round_number=round_number,
         mesa=mesa,
+        stats_map=stats_map,
     )
 
     _draw_block(
@@ -139,7 +157,12 @@ def _create_sheet_for_table(
         block_width=block_width,
         round_number=round_number,
         mesa=mesa,
+        stats_map=stats_map,
     )
+
+    if footer_text:
+        c.setFont("Helvetica", 9)
+        c.drawString(margin, margin - 4, footer_text)
 
     c.showPage()
     c.save()
@@ -152,6 +175,7 @@ def _draw_block(
     block_width: float,
     round_number: int,
     mesa: dict,
+    stats_map: dict[int, dict],
 ):
     """
     Dibuja UN bloque (la mitad izquierda o derecha de la página).
@@ -171,15 +195,15 @@ def _draw_block(
     # -----------------------------------------------------------
     # 2) Tabla de jugadores (estilo: ID | Jugador | G | P | E | Rank)
     # -----------------------------------------------------------
-    header_y = y_top - 16
-    row_height = 14
+    header_y = y_top - 18
+    row_height = 16
 
     # Posiciones de columnas dentro del bloque
-    id_x = x
-    jugador_x = x + 40
-    g_x = x + block_width - 80
-    p_x = g_x + 15
-    e_x = p_x + 20
+    id_x = x + 2
+    jugador_x = x + 44
+    g_x = x + block_width - 92
+    p_x = g_x + 18
+    e_x = p_x + 22
     r_x = e_x + 30
 
     # Encabezados
@@ -205,22 +229,29 @@ def _draw_block(
         player_id_text = f"{player['id']} {letter}"  # EJ: "45 C"
         c.drawString(id_x, y, player_id_text)
         c.drawString(jugador_x, y, full_name(player))
-        # G, P, E, Rank vacíos (para rellenar a mano)
-        c.drawString(g_x, y, "")
-        c.drawString(p_x, y, "")
-        c.drawString(e_x, y, "")
-        c.drawString(r_x, y, "")
+        if round_number > 1:
+            stats = stats_map.get(player["id"], {})
+            c.drawRightString(g_x + 10, y, str(stats.get("G", "")))
+            c.drawRightString(p_x + 14, y, str(stats.get("P", "")))
+            c.drawRightString(e_x + 24, y, str(stats.get("E", "")))
+            c.drawRightString(r_x + 24, y, str(stats.get("R", "")))
         y -= row_height
 
-    # Línea separadora bajo la tabla de jugadores
-    y_sep = y - 4
-    c.line(x, y_sep, x + block_width, y_sep)
+    # Tabla (líneas finas) para jugadores
+    table_top = header_y + 6
+    table_bottom = y + 6
+    c.setLineWidth(0.6)
+    c.rect(x, table_bottom, block_width, table_top - table_bottom)
+    for i in range(1, 5):
+        c.line(x, table_top - (i * row_height), x + block_width, table_top - (i * row_height))
+    for col_x in (jugador_x - 6, g_x - 6, p_x - 6, e_x - 6, r_x - 6):
+        c.line(col_x, table_bottom, col_x, table_top)
 
     # -----------------------------------------------------------
     # 3) Tabla de puntos por mano (Pareja A-C vs B-D)
     # -----------------------------------------------------------
     # Títulos pareja
-    y_pairs = y_sep - 16
+    y_pairs = table_bottom - 18
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x, y_pairs, "Pareja A-C:")
     c.setFont("Helvetica", 9)
@@ -243,8 +274,8 @@ def _draw_block(
     y_stats = y_pairs - 30
     c.setFont("Helvetica-Bold", 8.5)
     c.drawString(x, y_stats, "G (Ganadas): _______")
-    c.drawString(x + 110, y_stats, "P (Puntos): _______")
-    c.drawString(x + 220, y_stats, "E (Efectividad): _______")
+    c.drawString(x + 108, y_stats, "P (Puntos): _______")
+    c.drawString(x + 210, y_stats, "E (Efectividad): _______")
     # Rank general lo suelen poner en otra hoja, pero dejamos el espacio
     # por si acaso quieren anotarlo aquí.
     # (Si no cabe bien por el ancho del bloque, puedes borrar esta línea)
@@ -255,21 +286,21 @@ def _draw_block(
     y_table_top = y_stats - 18
     c.setFont("Helvetica-Bold", 9)
     c.drawString(x, y_table_top, "Mano")
-    c.drawString(x + 35, y_table_top, "Puntos A-C")
-    c.drawString(x + 110, y_table_top, "Puntos B-D")
-    c.drawString(x + 190, y_table_top, "Notas")
+    c.drawString(x + 36, y_table_top, "Puntos A-C")
+    c.drawString(x + 118, y_table_top, "Puntos B-D")
+    c.drawString(x + 200, y_table_top, "Notas")
 
     num_rows = 12
     y_row = y_table_top - 10
     c.setFont("Helvetica", 8.5)
 
     table_right_x = x + block_width
+    table_left_x = x
     for i in range(1, num_rows + 1):
-        # número de mano
         c.drawString(x + 2, y_row - 10, str(i))
-        # línea horizontal
-        c.line(x, y_row - 12, table_right_x, y_row - 12)
+        c.line(table_left_x, y_row - 12, table_right_x, y_row - 12)
         y_row -= 16
+    c.line(table_left_x, y_table_top - 4, table_right_x, y_table_top - 4)
 
     # Totales al final
     y_total = y_row - 8

@@ -233,6 +233,13 @@ class TablesView(ctk.CTkFrame):
     def _on_generate_round(self):
         rnd = self._get_round_number()
 
+        if storage.round_has_scores(rnd):
+            messagebox.showerror(
+                "No permitido",
+                f"La ronda {rnd} ya tiene resultados guardados y no se puede re-generar.",
+            )
+            return
+
         if storage.get_round_assignments(rnd):
             if not messagebox.askyesno(
                 "Confirmar",
