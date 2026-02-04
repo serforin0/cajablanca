@@ -19,6 +19,7 @@ class ScoreCaptureView(ctk.CTkFrame):
 
         self.round_var = ctk.StringVar(value="1")
         self.mesa_var = ctk.StringVar(value="")
+        self.winner_var = ctk.StringVar(value="AC")
 
         self._build_header()
         self._build_body()
@@ -104,19 +105,71 @@ class ScoreCaptureView(ctk.CTkFrame):
         self._build_team_box(self.teamA_box, "Equipo A (A + B)")
         self._build_team_box(self.teamB_box, "Equipo B (C + D)")
 
-        # puntos + guardar
+        # puntos por jugador + guardar
         bottom = ctk.CTkFrame(body, corner_radius=12)
         bottom.pack(fill="x", padx=16, pady=(0, 12))
 
         bottom.grid_columnconfigure(0, weight=1)
-        bottom.grid_columnconfigure(1, weight=1)
+        bottom.grid_columnconfigure(1, weight=2)
         bottom.grid_columnconfigure(2, weight=1)
+        bottom.grid_columnconfigure(3, weight=1)
+        bottom.grid_columnconfigure(4, weight=1)
 
-        self.entry_points_a = ctk.CTkEntry(bottom, placeholder_text="Puntos Equipo A (A+B)")
-        self.entry_points_b = ctk.CTkEntry(bottom, placeholder_text="Puntos Equipo B (C+D)")
+        ctk.CTkLabel(
+            bottom,
+            text="Puntos individuales por jugador",
+            font=("Roboto", 14, "bold"),
+        ).grid(row=0, column=0, columnspan=5, sticky="w", padx=12, pady=(10, 6))
 
-        self.entry_points_a.grid(row=0, column=0, padx=(12, 8), pady=12, sticky="ew")
-        self.entry_points_b.grid(row=0, column=1, padx=(8, 8), pady=12, sticky="ew")
+        ctk.CTkLabel(bottom, text="Letra", font=("Roboto", 12, "bold")).grid(
+            row=1, column=0, sticky="w", padx=12
+        )
+        ctk.CTkLabel(bottom, text="Jugador", font=("Roboto", 12, "bold")).grid(
+            row=1, column=1, sticky="w", padx=12
+        )
+        ctk.CTkLabel(bottom, text="Puntos", font=("Roboto", 12, "bold")).grid(
+            row=1, column=2, sticky="w", padx=12
+        )
+        ctk.CTkLabel(bottom, text="Penalidad", font=("Roboto", 12, "bold")).grid(
+            row=1, column=3, sticky="w", padx=12
+        )
+        ctk.CTkLabel(bottom, text="Final", font=("Roboto", 12, "bold")).grid(
+            row=1, column=4, sticky="w", padx=12
+        )
+
+        self.player_entries = {}
+        self.player_labels = {}
+        self.player_final_labels = {}
+        for idx, letra in enumerate(("A", "B", "C", "D"), start=2):
+            ctk.CTkLabel(bottom, text=letra, font=("Roboto", 12, "bold")).grid(
+                row=idx, column=0, sticky="w", padx=12, pady=4
+            )
+            lbl = ctk.CTkLabel(bottom, text="-", font=("Roboto", 12))
+            lbl.grid(row=idx, column=1, sticky="w", padx=12, pady=4)
+            entry_points = ctk.CTkEntry(bottom, placeholder_text="0")
+            entry_penalty = ctk.CTkEntry(bottom, placeholder_text="0")
+            entry_points.grid(row=idx, column=2, sticky="ew", padx=12, pady=4)
+            entry_penalty.grid(row=idx, column=3, sticky="ew", padx=12, pady=4)
+            final_label = ctk.CTkLabel(bottom, text="0", font=("Roboto", 12, "bold"))
+            final_label.grid(row=idx, column=4, sticky="w", padx=12, pady=4)
+            self.player_entries[letra] = (entry_points, entry_penalty)
+            self.player_labels[letra] = lbl
+            self.player_final_labels[letra] = final_label
+
+            entry_points.bind("<KeyRelease>", lambda e, l=letra: self._update_final_points(l))
+            entry_penalty.bind("<KeyRelease>", lambda e, l=letra: self._update_final_points(l))
+
+        winner_row = 6
+        ctk.CTkLabel(bottom, text="Pareja ganadora:", font=("Roboto", 12, "bold")).grid(
+            row=winner_row, column=0, sticky="w", padx=12, pady=(4, 4)
+        )
+        self.winner_combo = ctk.CTkComboBox(
+            bottom,
+            values=["AC", "BD"],
+            variable=self.winner_var,
+            width=100,
+        )
+        self.winner_combo.grid(row=winner_row, column=1, sticky="w", padx=12, pady=(4, 4))
 
         self.btn_save = ctk.CTkButton(
             bottom,
@@ -124,9 +177,9 @@ class ScoreCaptureView(ctk.CTkFrame):
             height=34,
             command=self._on_save,
         )
-        self.btn_save.grid(row=0, column=2, padx=(8, 12), pady=12, sticky="ew")
+        self.btn_save.grid(row=7, column=0, columnspan=5, padx=12, pady=(10, 12), sticky="ew")
 
-        # ✅ NUEVO: Penalización individual (VISIBLE)
+        # ✅ Ajuste adicional (opcional)
         penalty = ctk.CTkFrame(body, corner_radius=12)
         penalty.pack(fill="x", padx=16, pady=(0, 16))
 
@@ -137,7 +190,7 @@ class ScoreCaptureView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             penalty,
-            text="Penalización / Ajuste individual",
+            text="Ajuste adicional individual (opcional)",
             font=("Roboto", 14, "bold"),
         ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(10, 6))
 
@@ -221,8 +274,11 @@ class ScoreCaptureView(ctk.CTkFrame):
             self.teamA_box._p2.configure(text="-")
             self.teamB_box._p1.configure(text="-")
             self.teamB_box._p2.configure(text="-")
-            self.entry_points_a.delete(0, "end")
-            self.entry_points_b.delete(0, "end")
+            for entry_points, entry_penalty in self.player_entries.values():
+                entry_points.delete(0, "end")
+                entry_penalty.delete(0, "end")
+            for label in self.player_final_labels.values():
+                label.configure(text="0")
             self.status_badge.configure(text="", fg_color="gray30")
             return
 
@@ -238,6 +294,10 @@ class ScoreCaptureView(ctk.CTkFrame):
         self.teamA_box._p2.configure(text=fmt("B", mesa_data["B"]))
         self.teamB_box._p1.configure(text=fmt("C", mesa_data["C"]))
         self.teamB_box._p2.configure(text=fmt("D", mesa_data["D"]))
+        self.player_labels["A"].configure(text=fmt("A", mesa_data["A"]))
+        self.player_labels["B"].configure(text=fmt("B", mesa_data["B"]))
+        self.player_labels["C"].configure(text=fmt("C", mesa_data["C"]))
+        self.player_labels["D"].configure(text=fmt("D", mesa_data["D"]))
 
         status = storage.get_table_status(rnd, mesa_num)
         if status == "finished":
@@ -245,12 +305,21 @@ class ScoreCaptureView(ctk.CTkFrame):
         else:
             self.status_badge.configure(text="Jugando", fg_color="#2e7d32")
 
-        result = storage.get_table_result(rnd, mesa_num)
-        self.entry_points_a.delete(0, "end")
-        self.entry_points_b.delete(0, "end")
-        if result:
-            self.entry_points_a.insert(0, str(result["points_a"]))
-            self.entry_points_b.insert(0, str(result["points_b"]))
+        result = storage.get_table_player_scores(rnd, mesa_num)
+        for entry_points, entry_penalty in self.player_entries.values():
+            entry_points.delete(0, "end")
+            entry_penalty.delete(0, "end")
+        for label in self.player_final_labels.values():
+            label.configure(text="0")
+        self.winner_var.set("AC")
+        for row in result:
+            entries = self.player_entries.get(row["letra"])
+            if entries:
+                entry_points, entry_penalty = entries
+                entry_points.insert(0, str(row["base_points"]))
+                entry_penalty.insert(0, str(row["penalty_points"]))
+                self.player_final_labels[row["letra"]].configure(text=str(row["final_points"]))
+                self.winner_var.set(row.get("winner_pair", "AC"))
 
     def _on_save(self):
         rnd = self._get_round_number()
@@ -261,19 +330,41 @@ class ScoreCaptureView(ctk.CTkFrame):
             return
 
         try:
-            pa = int(self.entry_points_a.get().strip() or "0")
-            pb = int(self.entry_points_b.get().strip() or "0")
+            player_points = {}
+            for letra, (entry_points, entry_penalty) in self.player_entries.items():
+                player_points[letra] = {
+                    "base_points": int(entry_points.get().strip() or "0"),
+                    "penalty_points": int(entry_penalty.get().strip() or "0"),
+                }
         except ValueError:
-            messagebox.showerror("Error", "Los puntos deben ser números enteros.")
+            messagebox.showerror("Error", "Los puntos y penalidades deben ser enteros.")
             return
 
-        ok, msg = tournament.save_table_points(rnd, mesa_num, pa, pb)
+        winner_pair = self.winner_var.get().strip().upper()
+        ok, msg = tournament.save_table_player_scores(rnd, mesa_num, player_points, winner_pair)
         if not ok:
             messagebox.showerror("Error", msg)
             return
 
         messagebox.showinfo("Listo", msg)
         self._refresh_table_detail()
+
+    def _update_final_points(self, letra: str):
+        entries = self.player_entries.get(letra)
+        if not entries:
+            return
+        entry_points, entry_penalty = entries
+        try:
+            base_points = int(entry_points.get().strip() or "0")
+            penalty_points = int(entry_penalty.get().strip() or "0")
+        except ValueError:
+            self.player_final_labels[letra].configure(text="0")
+            return
+        if base_points < 0 or penalty_points < 0:
+            self.player_final_labels[letra].configure(text="0")
+            return
+        final_points = max(0, base_points - penalty_points)
+        self.player_final_labels[letra].configure(text=str(final_points))
 
     def _on_penalty(self):
         try:

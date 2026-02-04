@@ -26,6 +26,9 @@ def generate_first_round() -> Tuple[bool, str]:
     if total < 4:
         return False, "Se necesitan al menos 4 jugadores para generar la ronda."
 
+    if storage.round_has_scores(1):
+        return False, "No se puede re-generar la ronda 1 porque ya tiene resultados guardados."
+
     players = players[:]  # copia
     random.shuffle(players)
 
@@ -87,6 +90,9 @@ def generate_round_2() -> Tuple[bool, str]:
     r1 = storage.get_round_assignments(1)
     if not r1:
         return False, "No existe la Ronda 1. Genera la Ronda 1 primero."
+
+    if storage.round_has_scores(2):
+        return False, "No se puede re-generar la ronda 2 porque ya tiene resultados guardados."
 
     # Extraer parejas de R1: (A,C) y (B,D)
     pairs: List[Tuple[Dict, Dict]] = []
@@ -192,6 +198,71 @@ def save_table_points(
     return True, "Resultado guardado correctamente."
 
 
+def save_table_player_scores(
+    round_number: int,
+    mesa_number: int,
+    player_points: dict[str, dict],
+    winner_pair: str,
+) -> Tuple[bool, str]:
+    """
+    Guarda puntos individuales por jugador (A/B/C/D).
+
+    player_points = {
+        "A": {"base_points": int, "penalty_points": int},
+        "B": {"base_points": int, "penalty_points": int},
+        "C": {"base_points": int, "penalty_points": int},
+        "D": {"base_points": int, "penalty_points": int},
+    }
+    """
+    winner_pair = "AC" o "BD"
+    mesas = storage.get_round_assignments(round_number)
+    if not mesas:
+        return False, f"No hay mesas generadas para la ronda {round_number}."
+
+    mesa_data = next((m for m in mesas if m["mesa"] == mesa_number), None)
+    if not mesa_data:
+        return False, f"La mesa {mesa_number} no existe en la ronda {round_number}."
+
+    winner_pair = (winner_pair or "").upper().strip()
+    if winner_pair not in ("AC", "BD"):
+        return False, "Debes seleccionar la pareja ganadora (AC o BD)."
+
+    scores_rows = []
+    for letra in ("A", "B", "C", "D"):
+        data = player_points.get(letra, {})
+        try:
+            base_points = int(data.get("base_points", 0))
+            penalty_points = int(data.get("penalty_points", 0))
+        except Exception:
+            return False, "Puntos o penalidad inválidos (deben ser enteros)."
+
+        if base_points < 0 or penalty_points < 0:
+            return False, "Los puntos y penalidades no pueden ser negativos."
+
+        player = mesa_data[letra]
+        scores_rows.append(
+            {
+                "jugador_id": player["id"],
+                "letra": letra,
+                "base_points": base_points,
+                "penalty_points": penalty_points,
+            }
+        )
+
+    storage.save_table_player_scores(
+        round_number,
+        mesa_number,
+        scores_rows,
+        winner_pair,
+    )
+
+    storage.set_table_status(round_number, mesa_number, "finished")
+    storage.ensure_player_stats_rows()
+    storage.recompute_stats_from_results(win_weight=100)
+
+    return True, "Resultados individuales guardados correctamente."
+
+
 # ============================================================
 # PENALIZACIONES (restar puntos a un jugador específico)
 # ============================================================
@@ -258,8 +329,19 @@ class Tournament:
     def save_table_points(self, round_number: int, mesa_number: int, pa: int, pb: int):
         return save_table_points(round_number, mesa_number, pa, pb)
 
+    def save_table_player_scores(
+        self,
+        round_number: int,
+        mesa_number: int,
+        player_points: dict[str, dict],
+        winner_pair: str,
+    ):
+        return save_table_player_scores(round_number, mesa_number, player_points, winner_pair)
+
     def subtract_points(self, jugador_id: int, points: int, reason: str = "Penalización"):
         return subtract_points_from_player(jugador_id, points, reason)
 
     def get_ranking(self):
         return get_ranking()
+    if storage.round_has_scores(1):
+        return False, "No se puede re-generar la ronda 1 porque ya tiene resultados guardados."

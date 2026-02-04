@@ -1,4 +1,5 @@
 # ui/tables_view.py
+import os
 import customtkinter as ctk
 from tkinter import messagebox
 
@@ -233,6 +234,13 @@ class TablesView(ctk.CTkFrame):
     def _on_generate_round(self):
         rnd = self._get_round_number()
 
+        if storage.round_has_scores(rnd):
+            messagebox.showerror(
+                "No permitido",
+                f"La ronda {rnd} ya tiene resultados guardados y no se puede re-generar.",
+            )
+            return
+
         if storage.get_round_assignments(rnd):
             if not messagebox.askyesno(
                 "Confirmar",
@@ -263,7 +271,12 @@ class TablesView(ctk.CTkFrame):
     def _on_generate_all_pdfs(self):
         rnd = self._get_round_number()
         try:
-            count, folder = score_sheet.generate_score_sheets_for_round(rnd)
+            count, folder = score_sheet.generate_score_sheets_for_round(
+                rnd,
+                output_dir="hojas",
+                tournament_title=score_sheet.DEFAULT_TOURNAMENT_TITLE,
+                tournament_type="individual",
+            )
             messagebox.showinfo(
                 "Hojas generadas",
                 f"Se generaron {count} hojas en:\n{folder}",
@@ -274,7 +287,14 @@ class TablesView(ctk.CTkFrame):
     def _on_table_click(self, round_number: int, mesa_number: int):
         """Click en una mesa -> genera PDF SOLO de esa mesa."""
         try:
-            path = score_sheet.generate_score_sheet_for_table(round_number, mesa_number)
+            filename = f"ronda{round_number}_mesa{mesa_number:02d}.pdf"
+            path = score_sheet.generate_score_sheet_for_table(
+                round_number=round_number,
+                mesa_number=mesa_number,
+                output_path=os.path.join("hojas", filename),
+                tournament_title=score_sheet.DEFAULT_TOURNAMENT_TITLE,
+                tournament_type="individual",
+            )
             messagebox.showinfo(
                 "Hoja generada",
                 f"Se generó la hoja de la ronda {round_number}, mesa {mesa_number}:\n{path}",
