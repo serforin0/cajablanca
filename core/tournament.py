@@ -214,7 +214,6 @@ def save_table_player_scores(
         "D": {"base_points": int, "penalty_points": int},
     }
     """
-    winner_pair = "AC" o "BD"
     mesas = storage.get_round_assignments(round_number)
     if not mesas:
         return False, f"No hay mesas generadas para la ronda {round_number}."
@@ -343,5 +342,5 @@ class Tournament:
 
     def get_ranking(self):
         return get_ranking()
-    if storage.round_has_scores(1):
-        return False, "No se puede re-generar la ronda 1 porque ya tiene resultados guardados."
+    
+        

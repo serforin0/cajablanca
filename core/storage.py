@@ -1,13 +1,9 @@
 # core/storage.py
-import os  # ✅ nuevo (para TORNEO_DB_PATH)
-import sqlite3
-from pathlib import Path
 
-# ✅ BD_PATH configurable:
-# - Si existe TORNEO_DB_PATH, usa esa ruta (ideal para carpeta compartida en red)
-# - Si no, usa "torneo_domino.db" local
-DEFAULT_DB_PATH = Path("torneo_domino.db")
-DB_PATH = Path(os.environ.get("TORNEO_DB_PATH", str(DEFAULT_DB_PATH)))
+import sqlite3
+from core.paths import db_path
+
+
 
 
 def _apply_pragmas(conn: sqlite3.Connection):
@@ -28,7 +24,7 @@ def _apply_pragmas(conn: sqlite3.Connection):
 
 def get_connection():
     # ✅ timeout para que espere en bloqueos (además del busy_timeout)
-    conn = sqlite3.connect(DB_PATH, timeout=8)
+    conn = sqlite3.connect(str(db_path()))
     _apply_pragmas(conn)
     return conn
 
